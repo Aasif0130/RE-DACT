@@ -4,7 +4,7 @@ import cv2
 import pytesseract
 from core.misc import BLACK, is_human_image
 
-pytesseract.pytesseract.tesseract_cmd = r'C:\Users\Mohamad Aasif\tesseract.exe'
+pytesseract.pytesseract.tesseract_cmd = r'/opt/homebrew/bin/tesseract'
 
 def cluster_list(xs: list[int], tolerance: float = 0):
     if tolerance == 0 or len(xs) < 2:

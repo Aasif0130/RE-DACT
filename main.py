@@ -10,6 +10,7 @@ from groq import Groq
 import json
 import re
 import zipfile
+from itertools import groupby
 
 logging.basicConfig(level=logging.INFO)
 
@@ -100,6 +101,7 @@ def extract_entities(text: str):
         resp = client.chat.completions.create(
             messages=[{"role": "system", "content": prompt}, {"role": "user", "content": text}],
             model="llama-3.3-70b-versatile",
+
         )
 
         logging.info(f"API Response: {resp}")
@@ -190,7 +192,7 @@ def zip_redacted_files(file_paths: list[str]) -> str:
 def get_df(uploaded_file, file_type) -> list:
     try:
         res_dict = extract_entities(read_file(uploaded_file, file_type))
-        arr = [dict(obj.dict()) for obj in res_dict]
+        arr = [{"objValue": obj.objValue, "objType": obj.objType.value} for obj in res_dict]
         return pd.DataFrame(arr)
     except Exception as e:
         st.error(f"Error while extracting identifiers: {e}")
@@ -240,12 +242,19 @@ else:
     st.info("Please upload files to extract data from.")
 
 if file_data_dict:
-    obj_types = [e.value for e in IdentifierType]
+    present_obj_types = set()
+    for df in file_data_dict.values():
+        present_obj_types.update(df["objType"].unique())
+
+    present_obj_types = sorted(present_obj_types)  # Optional: for sorted dropdown
 
     data_to_redact = st.multiselect(
-        "Select data types to redact",
-        options=obj_types,
+    "Select data types to redact",
+    options=present_obj_types,
+    help="Only data types found in the uploaded files are shown."
     )
+
+    
     remove_picture = st.checkbox("Remove Face")
 
     if st.button("Redact"):
