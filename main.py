@@ -19,7 +19,7 @@ client = Groq(
 )
 
 st.set_page_config(
-    page_title="RedactPal",
+    page_title="RE-DACT",
     page_icon="🛡",
 )
 
@@ -199,7 +199,7 @@ def get_df(uploaded_file, file_type) -> list:
         logging.error(f"Error while extracting identifiers: {e}")
         return pd.DataFrame()
 
-st.title("RedactPal")
+st.title("RE-DACT🛡️")
 
 uploaded_files = st.file_uploader(
     "Upload PDFs or Images for redaction",
