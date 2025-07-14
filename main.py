@@ -12,6 +12,8 @@ import re
 import zipfile
 from prompt import pii_prompt
 from itertools import groupby
+import streamlit.components.v1 as components
+import base64
 
 logging.basicConfig(level=logging.INFO)
 
@@ -66,6 +68,7 @@ class IdentifierType(str, Enum):
     AADHAAR_ISSUE_DATE = "Aadhaar Issue Date"
     PIN_CODE = "PIN Code"
     Place_of_Issue = "Place of Issue"
+    SubDistrict="Sub District"
 
 class Identifier(BaseModel):
     objValue: str
@@ -132,7 +135,7 @@ def extract_entities(text: str):
         return []
 
 def search_replace(file, words: list[str], file_name: str, remove_picture: bool):
-    red_file_name, red_file_ext = file_name.split(".", 1)
+    red_file_name, red_file_ext = file_name.rsplit(".", 1)
     red_file_name = f"{red_file_name}_redacted.{red_file_ext}"
     file_type = is_pdf_or_image(file)
 
@@ -177,16 +180,34 @@ def get_df(uploaded_file, file_type) -> pd.DataFrame:
         logging.error(f"Error while extracting identifiers: {e}")
         return pd.DataFrame()
 
-def preview_file(file_path):
+def show_pdf_in_iframe(file_path, width=700, height=500):
+    with open(file_path, "rb") as f:
+        pdf_bytes = f.read()
+    base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
+    pdf_display = f"""
+    <iframe
+        src="data:application/pdf;base64,{base64_pdf}"
+        width="{width}"
+        height="{height}"
+        style="border: none;"
+    >
+    </iframe>
+    """
+    components.html(pdf_display, width=width, height=height)
+
+def show_preview(file_path, small_preview=False):
     ext = os.path.splitext(file_path)[1].lower()
     if ext == ".pdf":
-        with open(file_path, "rb") as f:
-            pdf_bytes = f.read()
-            st.pdf(pdf_bytes)
+        width = 300 if small_preview else 700
+        height = 400 if small_preview else 500
+        show_pdf_in_iframe(file_path, width=width, height=height)
     elif ext in [".png", ".jpg", ".jpeg"]:
-        st.image(file_path)
+        width = 300 if small_preview else None
+        st.image(file_path, width=width)
     else:
         st.write(f"Preview not available for {ext} files.")
+
+# ------------------ Streamlit UI ----------------------
 
 st.title("RE-DACT🛡️")
 
@@ -207,6 +228,7 @@ if uploaded_files:
                 f"Is this a scanned PDF? ({uploaded_file.name})",
                 ("Yes", "No"),
                 index=1,
+                key=f"scanned_{uploaded_file.name}",
             )
 
             if scanned_pdf == "Yes":
@@ -263,36 +285,63 @@ if file_data_dict:
                     )
                     redacted_file_paths.append(redacted_file_path)
 
-            if len(redacted_file_paths) == 1:
-                redacted_file_path = redacted_file_paths[0]
+            # Store redacted paths in session for preview buttons
+            st.session_state.redaction_done = True
+            st.session_state.preview_files = redacted_file_paths
 
-                st.subheader("Preview Redacted File")
-                preview_file(redacted_file_path)
+if 'redaction_done' in st.session_state and st.session_state.redaction_done:
+    if len(st.session_state.preview_files) == 1:
+        # Single file preview button
+        if st.button("Preview Redacted File"):
+            st.subheader("Preview Redacted File")
+            show_preview(st.session_state.preview_files[0])
 
-                with open(redacted_file_path, "rb") as f:
-                    st.download_button(
-                        label="Download Redacted File",
-                        data=f.read(),
-                        file_name=os.path.basename(redacted_file_path),
-                        mime="application/octet-stream",
-                    )
-            else:
-                zip_file = zip_redacted_files(redacted_file_paths)
+        # Download button
+        with open(st.session_state.preview_files[0], "rb") as f:
+            st.download_button(
+                label="Download Redacted File",
+                data=f.read(),
+                file_name=os.path.basename(st.session_state.preview_files[0]),
+                mime="application/octet-stream",
+            )
 
-                st.subheader("Preview All Redacted Files in Zip")
+    elif len(st.session_state.preview_files) > 1:
+        # Multiple files preview all button with expander (acting as a modal)
+        with st.expander("Preview All Redacted Files"):
+            # Initialize preview index if not set
+            if "modal_preview_index" not in st.session_state:
+                st.session_state.modal_preview_index = 0
 
-                with tempfile.TemporaryDirectory() as tmpdirname:
-                    with zipfile.ZipFile(zip_file, 'r') as zipf:
-                        zipf.extractall(tmpdirname)
-                        for filename in zipf.namelist():
-                            file_path = os.path.join(tmpdirname, filename)
-                            with st.expander(f"Preview: {filename}"):
-                                preview_file(file_path)
+            def prev_file():
+                if st.session_state.modal_preview_index > 0:
+                    st.session_state.modal_preview_index -= 1
 
-                with open(zip_file, "rb") as f:
-                    st.download_button(
-                        label="Download All Redacted Files",
-                        data=f.read(),
-                        file_name=zip_file,
-                        mime="application/zip",
-                    )
+            def next_file():
+                if st.session_state.modal_preview_index < len(st.session_state.preview_files) - 1:
+                    st.session_state.modal_preview_index += 1
+
+            idx = st.session_state.modal_preview_index
+            file_name = os.path.basename(st.session_state.preview_files[idx])
+
+            st.markdown(f"### Showing file {idx + 1} of {len(st.session_state.preview_files)}: **{file_name}**")
+
+            show_preview(st.session_state.preview_files[idx], small_preview=True)
+
+            col1, col2, col3 = st.columns([1, 6, 1])
+            with col1:
+                if st.button("⬅ Previous", key="prev_btn"):
+                    prev_file()
+            with col3:
+                if st.button("Next ➡", key="next_btn"):
+                    next_file()
+
+        # Download zip of all files
+        zip_file = zip_redacted_files(st.session_state.preview_files)
+
+        with open(zip_file, "rb") as f:
+            st.download_button(
+                label="Download All Redacted Files",
+                data=f.read(),
+                file_name=zip_file,
+                mime="application/zip",
+            )
