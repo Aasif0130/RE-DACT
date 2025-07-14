@@ -10,6 +10,7 @@ from groq import Groq
 import json
 import re
 import zipfile
+from prompt import pii_prompt
 from itertools import groupby
 
 logging.basicConfig(level=logging.INFO)
@@ -37,13 +38,13 @@ def read_file(file, file_type):
         raise ValueError("Invalid file type")
 
     with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-        temp_file.write(file.getvalue())  
-        temp_file_path = temp_file.name   
+        temp_file.write(file.getvalue())
+        temp_file_path = temp_file.name
 
     if file_type == "pdf":
-        return read_pdf(temp_file_path)  
+        return read_pdf(temp_file_path)
     elif file_type == "image":
-        return read_image(temp_file_path) 
+        return read_image(temp_file_path)
     else:
         raise ValueError(f"Unsupported file type: {file_type}")
 
@@ -74,34 +75,12 @@ class IdentifiersCollection(BaseModel):
     identifier: list[Identifier]
 
 def extract_entities(text: str):
-    prompt = (
-    "Without adding any comment, analyze the following text provided by the user and return a list of JSON objects. "
-    "Each element in the list must be a JSON object denoting personally identifiable information (PII). Each JSON object must contain the `value` and `type` of the PII. "
-    "Personally Identifiable Information (PII) is defined as information that can be used to uniquely identify a person, such as a name, email, phone number, exact address, or government-based ID. "
-    "Classify each identified PII under one of the following categories: "
-    "1. `Name`: If the text looks like a name (e.g., 'John Doe', 'राज कुमार', 'சிவா'). "
-    "2. `Email`: If the text looks like an email address (e.g., 'john.doe@example.com'). "
-    "3. `Phone number`: If the text looks like a phone number (e.g., '9876543210'). "
-    "4. `Government ID Number`: If the text looks like a government-issued ID (e.g., Aadhaar number, PAN number, driver's license), "
-    "    - Examples include: Aadhaar (12-digit number), PAN (ABCDE1234F), driver's license number. "
-    "5. `Address`: If the text looks like an address (e.g., '123 Main Street, New York, NY, 10001', '123 लाल किला रोड, दिल्ली', 'எண் 12, மார்க்கெட் தெரு, சென்னை'). "
-    "6. `Date of Birth`: If the text looks like a date of birth (e.g., '01/01/1990', 'Aadhaar Issue Date: 01-01-2015'). "
-    "7. `Enrolment No.`: If the text looks like an enrollment number (e.g., 'Enrollment No. 12345'). "
-    "8. `Father Name`: If the text contains 'S/O' (e.g., 'S/O John Doe'). "
-    "9. `VID`: If the text looks like a VID number (e.g., 'VID 56789'). "
-    "10. `Place of Issue`: If the text indicates place of issue (e.g., 'Place of Issue: New Delhi'). "
-    "11. `PIN Code`: If the text looks like a PIN code (e.g., '110001'). "
-    "The input text may include multiple languages like Hindi, Tamil, Bengali, Urdu, or other local languages, and you should consider them when identifying PII. "
-    "Ensure that text in languages such as Hindi, Tamil, Bengali, Urdu, or any local language is also accurately processed for PII. "
-    "Return the list of identified PII as JSON objects with the 'value' and 'type' fields. For example: "
-    "[{'value': 'John Doe', 'type': 'Name'}, {'value': '9876543210', 'type': 'Phone number'}]."
-)
+    prompt = pii_prompt
 
     try:
         resp = client.chat.completions.create(
             messages=[{"role": "system", "content": prompt}, {"role": "user", "content": text}],
             model="llama-3.3-70b-versatile",
-
         )
 
         logging.info(f"API Response: {resp}")
@@ -109,7 +88,6 @@ def extract_entities(text: str):
         resp_data = resp.choices[0].message.content.strip()
 
         resp_data = resp_data.replace("'", '"')
-
         resp_data = resp_data.replace(r'\"', '"')
 
         try:
@@ -127,12 +105,12 @@ def extract_entities(text: str):
                 obj_type = "Name"
 
             if re.match(r'\d{2}/\d{2}/\d{4}', obj_value) or re.match(r'\d{4}-\d{2}-\d{2}', obj_value):
-                obj_type = "Date of Birth" 
+                obj_type = "Date of Birth"
 
-            if re.match(r'^\d{4} \d{4} \d{4}$', obj_value):  
-                obj_type = "Government ID Number" 
+            if re.match(r'^\d{4} \d{4} \d{4}$', obj_value):
+                obj_type = "Government ID Number"
 
-            if re.match(r'\d{4}', obj_value): 
+            if re.match(r'\d{4}', obj_value):
                 obj_type = "Government ID Number"
 
             if obj_type in ["Name", "Phone number", "Government ID Number", "Address"]:
@@ -189,7 +167,7 @@ def zip_redacted_files(file_paths: list[str]) -> str:
     return zip_filename
 
 @st.cache_data
-def get_df(uploaded_file, file_type) -> list:
+def get_df(uploaded_file, file_type) -> pd.DataFrame:
     try:
         res_dict = extract_entities(read_file(uploaded_file, file_type))
         arr = [{"objValue": obj.objValue, "objType": obj.objType.value} for obj in res_dict]
@@ -198,6 +176,17 @@ def get_df(uploaded_file, file_type) -> list:
         st.error(f"Error while extracting identifiers: {e}")
         logging.error(f"Error while extracting identifiers: {e}")
         return pd.DataFrame()
+
+def preview_file(file_path):
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".pdf":
+        with open(file_path, "rb") as f:
+            pdf_bytes = f.read()
+            st.pdf(pdf_bytes)
+    elif ext in [".png", ".jpg", ".jpeg"]:
+        st.image(file_path)
+    else:
+        st.write(f"Preview not available for {ext} files.")
 
 st.title("RE-DACT🛡️")
 
@@ -221,7 +210,7 @@ if uploaded_files:
             )
 
             if scanned_pdf == "Yes":
-                file_type = "image"  
+                file_type = "image"
         with st.spinner(f"Extracting data from {uploaded_file.name}..."):
             df = get_df(uploaded_file, file_type)
 
@@ -249,12 +238,11 @@ if file_data_dict:
     present_obj_types = sorted(present_obj_types)  # Optional: for sorted dropdown
 
     data_to_redact = st.multiselect(
-    "Select data types to redact",
-    options=present_obj_types,
-    help="Only data types found in the uploaded files are shown."
+        "Select data types to redact",
+        options=present_obj_types,
+        help="Only data types found in the uploaded files are shown."
     )
 
-    
     remove_picture = st.checkbox("Remove Face")
 
     if st.button("Redact"):
@@ -277,15 +265,30 @@ if file_data_dict:
 
             if len(redacted_file_paths) == 1:
                 redacted_file_path = redacted_file_paths[0]
+
+                st.subheader("Preview Redacted File")
+                preview_file(redacted_file_path)
+
                 with open(redacted_file_path, "rb") as f:
                     st.download_button(
                         label="Download Redacted File",
                         data=f.read(),
                         file_name=os.path.basename(redacted_file_path),
-                        mime="application/octet-stream",  
+                        mime="application/octet-stream",
                     )
             else:
                 zip_file = zip_redacted_files(redacted_file_paths)
+
+                st.subheader("Preview All Redacted Files in Zip")
+
+                with tempfile.TemporaryDirectory() as tmpdirname:
+                    with zipfile.ZipFile(zip_file, 'r') as zipf:
+                        zipf.extractall(tmpdirname)
+                        for filename in zipf.namelist():
+                            file_path = os.path.join(tmpdirname, filename)
+                            with st.expander(f"Preview: {filename}"):
+                                preview_file(file_path)
+
                 with open(zip_file, "rb") as f:
                     st.download_button(
                         label="Download All Redacted Files",
